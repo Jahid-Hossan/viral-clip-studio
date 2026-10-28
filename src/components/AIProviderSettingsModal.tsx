@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { X, Server, Check, AlertCircle, RefreshCw, Eye, EyeOff, Zap, ShieldCheck, Search, ChevronDown, Sparkles, SlidersHorizontal } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { X, Server, Check, AlertCircle, RefreshCw, Eye, EyeOff, Zap, ShieldCheck, Search, ChevronDown, Sparkles, SlidersHorizontal, KeyRound, CheckCircle2 } from 'lucide-react';
 import { AIProviderConfig, AIProviderType, AIModelOption } from '../types';
 import { DEFAULT_PROVIDER_CONFIGS, saveStoredProviderConfig } from '../lib/providerDefaults';
 
@@ -26,19 +26,29 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
   const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
 
-  // Model Fetching States
+  // Model Fetching States (Strictly for API-Connected Models)
   const [availableModels, setAvailableModels] = useState<AIModelOption[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   const [isManualInput, setIsManualInput] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const [isApiConnected, setIsApiConnected] = useState(false);
 
-  // Fetch available models from backend endpoint
-  const handleFetchModels = async (
+  // Authenticate API Key and Fetch Only Connected Models
+  const handleConnectAndFetch = async (
     targetProvider = provider,
     targetKey = apiKey,
     targetUrl = baseUrl
   ) => {
+    const keyToTest = targetKey.trim();
+
+    if (targetProvider !== 'opencode' && !keyToTest) {
+      setModelsError(`Please enter your ${DEFAULT_PROVIDER_CONFIGS[targetProvider].name} API Key first.`);
+      setAvailableModels([]);
+      setIsApiConnected(false);
+      return;
+    }
+
     setIsLoadingModels(true);
     setModelsError(null);
 
@@ -48,55 +58,43 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           provider: targetProvider,
-          apiKey: targetKey.trim(),
+          apiKey: keyToTest,
           baseUrl: targetUrl.trim()
         })
       });
 
       const data = await response.json();
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to retrieve models from provider');
+        throw new Error(data.error || 'Failed to authenticate and fetch connected models.');
       }
 
       const fetchedList: AIModelOption[] = data.models || [];
       setAvailableModels(fetchedList);
+      setIsApiConnected(true);
 
-      // If current model isn't in fetched list, check for smart match or pick default
+      // Select matching model or first connected model
       if (fetchedList.length > 0) {
-        const exactMatch = fetchedList.find((m) => m.id === modelName);
-        if (!exactMatch) {
-          // If user previously had a partial match (e.g. nemotron-3-ultra-550b-a55b -> nvidia/nemotron-3-ultra-550b-a55b)
-          const partialMatch = fetchedList.find((m) =>
+        const exact = fetchedList.find((m) => m.id === modelName);
+        if (!exact) {
+          // Check for partial match (e.g. nemotron-3-ultra-550b-a55b in nvidia/nemotron-3-ultra-550b-a55b)
+          const partial = fetchedList.find((m) =>
             m.id.toLowerCase().includes(modelName.toLowerCase().replace(/^(nvidia|meta|google|anthropic)\//, ''))
           );
-          if (partialMatch) {
-            setModelName(partialMatch.id);
+          if (partial) {
+            setModelName(partial.id);
           } else {
-            // Find default model if present, otherwise first
-            const defaultModel = DEFAULT_PROVIDER_CONFIGS[targetProvider].defaultModel;
-            const hasDefault = fetchedList.find((m) => m.id === defaultModel);
-            if (hasDefault) {
-              setModelName(defaultModel);
-            } else {
-              setModelName(fetchedList[0].id);
-            }
+            setModelName(fetchedList[0].id);
           }
         }
       }
     } catch (err: any) {
-      console.warn('Fetch models error:', err.message);
-      setModelsError(err.message || 'Could not fetch models. Check network or API key.');
+      setIsApiConnected(false);
+      setAvailableModels([]);
+      setModelsError(err.message || 'API connection failed. Please verify your credentials.');
     } finally {
       setIsLoadingModels(false);
     }
   };
-
-  // Auto-fetch models when modal opens or provider changes
-  useEffect(() => {
-    if (isOpen) {
-      handleFetchModels(provider, apiKey, baseUrl);
-    }
-  }, [provider]);
 
   const handleProviderSelect = (newProvider: AIProviderType) => {
     setProvider(newProvider);
@@ -106,8 +104,9 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
     setTestStatus('idle');
     setTestMessage('');
     setModelSearch('');
-    // Trigger models fetch for the new provider
-    handleFetchModels(newProvider, apiKey, defaults.defaultBaseUrl);
+    setAvailableModels([]);
+    setIsApiConnected(false);
+    setModelsError(null);
   };
 
   const handleTestConnection = async () => {
@@ -133,11 +132,6 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
 
       setTestStatus('success');
       setTestMessage(`Connected successfully! Latency: ${data.latencyMs}ms (${data.model})`);
-
-      // If test succeeded, also ensure models list is fresh
-      if (availableModels.length === 0) {
-        handleFetchModels(provider, apiKey, baseUrl);
-      }
     } catch (err: any) {
       setTestStatus('error');
       setTestMessage(err.message || 'Connection failed. Please check credentials & URL.');
@@ -180,11 +174,11 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 AI Engine & Provider Settings
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                  Live Model Discovery
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  API Connected Models Only
                 </span>
               </h3>
-              <p className="text-xs text-slate-400">Configure Gemini, OpenRouter, NVIDIA NIM, OmniRoute, or Local LLMs</p>
+              <p className="text-xs text-slate-400">Authenticate your API key to fetch only authorized, active models</p>
             </div>
           </div>
           <button
@@ -223,11 +217,17 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
             </div>
           </div>
 
-          {/* API Key */}
+          {/* API Key with Connect Action */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-bold text-slate-300">
-                API Key {provider === 'gemini' && '(Optional if GEMINI_API_KEY is in .env)'}
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <KeyRound className="size-3.5 text-cyan-400" />
+                <span>API Key</span>
+                {isApiConnected && (
+                  <span className="text-[10px] font-medium text-emerald-400 flex items-center gap-1">
+                    <CheckCircle2 className="size-3" /> Connected
+                  </span>
+                )}
               </label>
               <button
                 type="button"
@@ -242,10 +242,14 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
               <input
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                onBlur={() => {
-                  if (apiKey.trim()) {
-                    handleFetchModels(provider, apiKey, baseUrl);
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  setIsApiConnected(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleConnectAndFetch(provider, apiKey, baseUrl);
                   }
                 }}
                 placeholder={DEFAULT_PROVIDER_CONFIGS[provider].placeholderKey}
@@ -253,32 +257,29 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
               />
               <button
                 type="button"
-                onClick={() => handleFetchModels(provider, apiKey, baseUrl)}
+                onClick={() => handleConnectAndFetch(provider, apiKey, baseUrl)}
                 disabled={isLoadingModels}
-                title="Fetch models with this API key"
-                className="px-3 py-2.5 rounded-xl border border-slate-800 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                className="px-4 py-2.5 rounded-xl border border-indigo-500/40 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 shadow-sm"
               >
-                <RefreshCw className={`size-3.5 text-cyan-400 ${isLoadingModels ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">Fetch Models</span>
+                <RefreshCw className={`size-3.5 text-indigo-400 ${isLoadingModels ? 'animate-spin' : ''}`} />
+                <span>{isLoadingModels ? 'Connecting...' : 'Connect & Fetch Models'}</span>
               </button>
             </div>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Submit your key to authenticate and load only models authorized on your account.
+            </p>
           </div>
 
-          {/* Model Selection / Dropdown */}
+          {/* Model Selection Dropdown (Connected Models Only) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <label className="text-xs font-bold text-slate-300">
                   Model Identifier
                 </label>
-                {availableModels.length > 0 && (
+                {isApiConnected && availableModels.length > 0 && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                    {availableModels.length} models ready
-                  </span>
-                )}
-                {isLoadingModels && (
-                  <span className="text-[10px] text-cyan-400 flex items-center gap-1">
-                    <RefreshCw className="size-3 animate-spin" /> Fetching models...
+                    {availableModels.length} connected models
                   </span>
                 )}
               </div>
@@ -289,28 +290,28 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
                 className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer transition-colors"
               >
                 <SlidersHorizontal className="size-3" />
-                <span>{isManualInput ? 'Use Dropdown' : 'Type Custom ID'}</span>
+                <span>{isManualInput ? 'Use Dropdown' : 'Manual Input'}</span>
               </button>
             </div>
 
             {isManualInput ? (
-              /* Freeform Text Input */
+              /* Manual Fallback Input */
               <div className="space-y-1">
                 <input
                   type="text"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
-                  placeholder="e.g. nvidia/nemotron-3-ultra-550b-a55b or gemini-3.8-flash"
+                  placeholder="e.g. nvidia/nemotron-3-ultra-550b-a55b"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono"
                 />
                 <p className="text-[10px] text-slate-500">
-                  Manual mode active. Enter any provider-specific model string.
+                  Manual mode active.
                 </p>
               </div>
-            ) : (
-              /* Dropdown with Search Filter */
+            ) : availableModels.length > 0 ? (
+              /* Dropdown of Authenticated Models */
               <div className="space-y-2">
-                {/* Search Filter for large lists (OpenRouter has 450+, NVIDIA has 84) */}
+                {/* Search Filter for large lists */}
                 {availableModels.length > 10 && (
                   <div className="relative">
                     <Search className="size-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -318,7 +319,7 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
                       type="text"
                       value={modelSearch}
                       onChange={(e) => setModelSearch(e.target.value)}
-                      placeholder={`Search ${availableModels.length} models (e.g. nemotron, llama, claude)...`}
+                      placeholder={`Filter ${availableModels.length} connected models...`}
                       className="w-full bg-slate-950/70 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
                     />
                     {modelSearch && (
@@ -333,50 +334,55 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
                   </div>
                 )}
 
-                {/* Dropdown Select Element */}
+                {/* Dropdown Select */}
                 <div className="relative">
                   <select
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 pr-8 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 font-mono appearance-none cursor-pointer"
                   >
-                    {filteredModels.length > 0 ? (
-                      filteredModels.map((m) => (
-                        <option key={m.id} value={m.id} className="bg-slate-900 py-1">
-                          {m.id} {m.description ? `— (${m.description})` : ''}
-                        </option>
-                      ))
-                    ) : (
-                      <option value={modelName} className="bg-slate-900">
-                        {modelName || 'No models match filter'}
+                    {filteredModels.map((m) => (
+                      <option key={m.id} value={m.id} className="bg-slate-900 py-1">
+                        {m.id} {m.description ? `— (${m.description})` : ''}
                       </option>
-                    )}
+                    ))}
                   </select>
                   <ChevronDown className="size-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
 
-                {/* Selected Model Details Preview */}
-                {modelName && (
-                  <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-2 overflow-hidden">
-                      <Sparkles className="size-3.5 text-cyan-400 shrink-0" />
-                      <span className="text-slate-400">Selected:</span>
-                      <code className="text-cyan-300 font-mono truncate">{modelName}</code>
-                    </div>
-                    {availableModels.find((m) => m.id === modelName)?.description && (
-                      <span className="text-[10px] text-slate-500 truncate max-w-[200px]">
-                        {availableModels.find((m) => m.id === modelName)?.description}
-                      </span>
-                    )}
+                {/* Active Selection Details Preview */}
+                <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 flex items-center justify-between text-[11px]">
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <Sparkles className="size-3.5 text-emerald-400 shrink-0" />
+                    <span className="text-slate-400">Active:</span>
+                    <code className="text-emerald-300 font-mono truncate">{modelName}</code>
                   </div>
-                )}
+                  <span className="text-[10px] text-emerald-500/80 shrink-0">
+                    API Connected
+                  </span>
+                </div>
+              </div>
+            ) : (
+              /* Awaiting API Key Connection Notice */
+              <div className="p-4 rounded-xl border border-dashed border-slate-800 bg-slate-950/40 text-center space-y-2">
+                <div className="size-8 rounded-full bg-slate-800/60 flex items-center justify-center mx-auto text-slate-400">
+                  <KeyRound className="size-4 text-slate-400" />
+                </div>
+                <p className="text-xs text-slate-300 font-medium">
+                  {isLoadingModels ? 'Authenticating with API...' : 'No Connected Models Loaded'}
+                </p>
+                <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
+                  {isLoadingModels
+                    ? 'Verifying your API key and discovering authorized models...'
+                    : `Enter your ${DEFAULT_PROVIDER_CONFIGS[provider].name} API key above and click "Connect & Fetch Models".`}
+                </p>
+              </div>
+            )}
 
-                {modelsError && (
-                  <div className="text-[11px] text-amber-400/90 flex items-center gap-1.5 mt-1">
-                    <AlertCircle className="size-3 shrink-0" />
-                    <span>{modelsError}</span>
-                  </div>
-                )}
+            {modelsError && (
+              <div className="p-3 rounded-xl border border-rose-500/30 bg-rose-950/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="size-4 text-rose-400 shrink-0" />
+                <span className="font-mono text-[11px] break-all">{modelsError}</span>
               </div>
             )}
           </div>
@@ -395,7 +401,7 @@ export const AIProviderSettingsModal: React.FC<AIProviderSettingsModalProps> = (
             />
           </div>
 
-          {/* Test Status Banner */}
+          {/* Test Connection Banner */}
           {testStatus !== 'idle' && (
             <div
               className={`p-3 rounded-xl border text-xs flex items-center gap-2.5 ${

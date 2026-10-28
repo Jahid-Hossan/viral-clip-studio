@@ -349,102 +349,175 @@ app.post('/api/test-provider', async (req, res) => {
   }
 });
 
-// Fetch Available Models for Selected Provider
+// Fetch Connected Models for Selected Provider (Authenticates with API Key)
 app.post('/api/fetch-models', async (req, res) => {
   const { provider, apiKey, baseUrl } = req.body;
+  const cleanKey = (apiKey || '').trim();
+
+  // Enforce API key requirement for cloud providers
+  if (provider !== 'opencode') {
+    const keyToUse = cleanKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : '');
+    if (!keyToUse) {
+      return res.status(400).json({
+        success: false,
+        error: `Please enter your API Key to fetch connected models for ${provider.toUpperCase()}.`,
+        models: []
+      });
+    }
+  }
 
   try {
     let models: Array<{ id: string; name: string; description?: string }> = [];
 
     if (provider === 'nvidia') {
       const targetBase = baseUrl || 'https://integrate.api.nvidia.com/v1';
-      const url = `${targetBase.replace(/\/+$/, '')}/models`;
-      const response = await fetch(url, {
+      
+      // 1. Verify key connection against NVIDIA endpoint
+      const authCheckRes = await fetch(`${targetBase.replace(/\/+$/, '')}/chat/completions`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          'Authorization': `Bearer ${cleanKey}`
+        },
+        body: JSON.stringify({
+          model: 'mistralai/mistral-large-2-instruct',
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1
+        })
+      });
+
+      // If status is 401 or 403, key is invalid
+      if (authCheckRes.status === 401 || authCheckRes.status === 403) {
+        return res.status(401).json({
+          success: false,
+          error: 'NVIDIA Authorization Failed: Invalid API Key. Please verify your nvapi-... key.',
+          models: []
+        });
+      }
+
+      // 2. Fetch models accessible via this key
+      const response = await fetch(`${targetBase.replace(/\/+$/, '')}/models`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${cleanKey}`
         }
       });
-      if (response.ok) {
-        const data = await response.json();
-        models = (data.data || []).map((m: any) => ({
-          id: m.id,
-          name: m.id,
-          description: m.owned_by ? `By ${m.owned_by}` : undefined
-        }));
-      } else {
+
+      if (!response.ok) {
         const errText = await response.text();
         throw new Error(`NVIDIA API HTTP ${response.status}: ${errText.substring(0, 150)}`);
       }
+
+      const data = await response.json();
+      
+      // Filter out non-chat models (embeddings, reward, safety guard, parsers, classifiers)
+      const nonChatKeywords = ['embed', 'reward', 'safety-guard', 'content-safety', 'topic-control', 'parse', 'detector', 'deplot', 'calibration', 'kosmos-2'];
+      models = (data.data || [])
+        .filter((m: any) => {
+          const id = (m.id || '').toLowerCase();
+          return !nonChatKeywords.some((kw) => id.includes(kw));
+        })
+        .map((m: any) => ({
+          id: m.id,
+          name: m.id,
+          description: m.owned_by ? `Connected (${m.owned_by})` : 'Connected'
+        }));
+
     } else if (provider === 'openrouter' || provider === 'omniroute') {
       const targetBase = baseUrl || (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.omniroute.ai/v1');
-      const url = `${targetBase.replace(/\/+$/, '')}/models`;
-      const response = await fetch(url, {
+      
+      // 1. Verify key connection with OpenRouter auth endpoint
+      if (provider === 'openrouter') {
+        const authRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+          headers: { 'Authorization': `Bearer ${cleanKey}` }
+        });
+        if (!authRes.ok) {
+          return res.status(401).json({
+            success: false,
+            error: 'OpenRouter Authorization Failed: Invalid API key.',
+            models: []
+          });
+        }
+      }
+
+      // 2. Fetch models connected to this account
+      const response = await fetch(`${targetBase.replace(/\/+$/, '')}/models`, {
         headers: {
           'Content-Type': 'application/json',
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          'Authorization': `Bearer ${cleanKey}`
         }
       });
-      if (response.ok) {
-        const data = await response.json();
-        models = (data.data || []).map((m: any) => ({
-          id: m.id,
-          name: m.name || m.id,
-          description: m.context_length ? `${Math.round(m.context_length / 1000)}k ctx` : undefined
-        }));
-      } else {
+
+      if (!response.ok) {
         const errText = await response.text();
         throw new Error(`Provider API HTTP ${response.status}: ${errText.substring(0, 150)}`);
       }
+
+      const data = await response.json();
+      models = (data.data || [])
+        .filter((m: any) => !m.id.includes('embed') && !m.id.includes('moderation'))
+        .map((m: any) => ({
+          id: m.id,
+          name: m.name || m.id,
+          description: m.context_length ? `${Math.round(m.context_length / 1000)}k ctx • Connected` : 'Connected'
+        }));
+
     } else if (provider === 'gemini') {
-      const keyToUse = apiKey || process.env.GEMINI_API_KEY;
-      if (keyToUse) {
-        try {
-          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keyToUse}`);
-          if (response.ok) {
-            const data = await response.json();
-            models = (data.models || [])
-              .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
-              .map((m: any) => {
-                const cleanId = m.name.replace(/^models\//, '');
-                return {
-                  id: cleanId,
-                  name: m.displayName ? `${cleanId} (${m.displayName})` : cleanId,
-                  description: m.description ? m.description.substring(0, 70) + '...' : undefined
-                };
-              });
-          }
-        } catch (e) {
-          console.warn('Gemini live models fetch warning:', e);
-        }
+      const keyToUse = cleanKey || process.env.GEMINI_API_KEY;
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keyToUse}`);
+      
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        return res.status(401).json({
+          success: false,
+          error: `Google Gemini Authorization Failed: ${errData.error?.message || 'Invalid API Key'}`,
+          models: []
+        });
       }
-      if (models.length === 0) {
-        models = [
-          { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (Recommended - Fast & Accurate)', description: 'Best for video repurposing & timestamp accuracy' },
-          { id: 'gemini-3.8-pro', name: 'gemini-3.8-pro (Deep Reasoning)', description: 'Best for complex long transcripts & nuanced hooks' },
-          { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', description: 'Advanced contextual analysis' },
-          { id: 'gemini-2.0-flash', name: 'gemini-2.0-flash', description: 'Low latency multimodal' },
-          { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro', description: 'Standard 2M token context' }
-        ];
-      }
+
+      const data = await response.json();
+      // Filter strictly to generation-capable models connected to this API key
+      models = (data.models || [])
+        .filter((m: any) => {
+          const methods = m.supportedGenerationMethods || [];
+          const id = (m.name || '').toLowerCase();
+          return methods.includes('generateContent') && !id.includes('embedding') && !id.includes('tts') && !id.includes('aqa');
+        })
+        .map((m: any) => {
+          const cleanId = m.name.replace(/^models\//, '');
+          return {
+            id: cleanId,
+            name: m.displayName ? `${cleanId} (${m.displayName})` : cleanId,
+            description: 'API Connected'
+          };
+        });
+
     } else {
       // Custom / OpenCode / Ollama
       const cleanBase = (baseUrl || 'http://localhost:11434/v1').replace(/\/+$/, '');
       let fetched = false;
+
       try {
         const response = await fetch(`${cleanBase}/models`, {
           headers: {
             'Content-Type': 'application/json',
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+            ...(cleanKey ? { Authorization: `Bearer ${cleanKey}` } : {})
           }
         });
         if (response.ok) {
           const data = await response.json();
           models = (data.data || []).map((m: any) => ({
             id: m.id,
-            name: m.id
+            name: m.id,
+            description: 'Local/Custom Connected'
           }));
           fetched = true;
+        } else if (response.status === 401 || response.status === 403) {
+          return res.status(401).json({
+            success: false,
+            error: 'Endpoint Authorization Failed: Check API Key or permissions.',
+            models: []
+          });
         }
       } catch (e) {}
 
@@ -456,17 +529,32 @@ app.post('/api/fetch-models', async (req, res) => {
             const data = await ollamaRes.json();
             models = (data.models || []).map((m: any) => ({
               id: m.name,
-              name: m.name
+              name: m.name,
+              description: 'Ollama Installed & Connected'
             }));
+            fetched = true;
           }
         } catch (err) {}
       }
+
+      if (!fetched) {
+        return res.status(400).json({
+          success: false,
+          error: `Unable to connect to ${cleanBase}. Ensure your server/Ollama instance is running.`,
+          models: []
+        });
+      }
     }
 
-    // Sort alphabetically by ID
+    // Sort models cleanly
     models.sort((a, b) => a.id.localeCompare(b.id));
 
-    return res.json({ success: true, models, count: models.length });
+    return res.json({
+      success: true,
+      models,
+      count: models.length,
+      connected: true
+    });
   } catch (err: any) {
     return res.status(400).json({ success: false, error: err.message, models: [] });
   }
