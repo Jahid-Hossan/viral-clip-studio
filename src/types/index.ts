@@ -7,6 +7,12 @@ export interface AIProviderConfig {
   modelName: string;
 }
 
+export interface AIModelOption {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 export interface CurationPref {
   customPrompt?: string;
   viralityProfile: 'high_energy_tiktok' | 'podcast_story' | 'educational' | 'comedy_punchline';

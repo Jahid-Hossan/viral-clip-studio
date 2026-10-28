@@ -349,6 +349,129 @@ app.post('/api/test-provider', async (req, res) => {
   }
 });
 
+// Fetch Available Models for Selected Provider
+app.post('/api/fetch-models', async (req, res) => {
+  const { provider, apiKey, baseUrl } = req.body;
+
+  try {
+    let models: Array<{ id: string; name: string; description?: string }> = [];
+
+    if (provider === 'nvidia') {
+      const targetBase = baseUrl || 'https://integrate.api.nvidia.com/v1';
+      const url = `${targetBase.replace(/\/+$/, '')}/models`;
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        models = (data.data || []).map((m: any) => ({
+          id: m.id,
+          name: m.id,
+          description: m.owned_by ? `By ${m.owned_by}` : undefined
+        }));
+      } else {
+        const errText = await response.text();
+        throw new Error(`NVIDIA API HTTP ${response.status}: ${errText.substring(0, 150)}`);
+      }
+    } else if (provider === 'openrouter' || provider === 'omniroute') {
+      const targetBase = baseUrl || (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.omniroute.ai/v1');
+      const url = `${targetBase.replace(/\/+$/, '')}/models`;
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        models = (data.data || []).map((m: any) => ({
+          id: m.id,
+          name: m.name || m.id,
+          description: m.context_length ? `${Math.round(m.context_length / 1000)}k ctx` : undefined
+        }));
+      } else {
+        const errText = await response.text();
+        throw new Error(`Provider API HTTP ${response.status}: ${errText.substring(0, 150)}`);
+      }
+    } else if (provider === 'gemini') {
+      const keyToUse = apiKey || process.env.GEMINI_API_KEY;
+      if (keyToUse) {
+        try {
+          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${keyToUse}`);
+          if (response.ok) {
+            const data = await response.json();
+            models = (data.models || [])
+              .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+              .map((m: any) => {
+                const cleanId = m.name.replace(/^models\//, '');
+                return {
+                  id: cleanId,
+                  name: m.displayName ? `${cleanId} (${m.displayName})` : cleanId,
+                  description: m.description ? m.description.substring(0, 70) + '...' : undefined
+                };
+              });
+          }
+        } catch (e) {
+          console.warn('Gemini live models fetch warning:', e);
+        }
+      }
+      if (models.length === 0) {
+        models = [
+          { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash (Recommended - Fast & Accurate)', description: 'Best for video repurposing & timestamp accuracy' },
+          { id: 'gemini-3.8-pro', name: 'gemini-3.8-pro (Deep Reasoning)', description: 'Best for complex long transcripts & nuanced hooks' },
+          { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', description: 'Advanced contextual analysis' },
+          { id: 'gemini-2.0-flash', name: 'gemini-2.0-flash', description: 'Low latency multimodal' },
+          { id: 'gemini-1.5-pro', name: 'gemini-1.5-pro', description: 'Standard 2M token context' }
+        ];
+      }
+    } else {
+      // Custom / OpenCode / Ollama
+      const cleanBase = (baseUrl || 'http://localhost:11434/v1').replace(/\/+$/, '');
+      let fetched = false;
+      try {
+        const response = await fetch(`${cleanBase}/models`, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          models = (data.data || []).map((m: any) => ({
+            id: m.id,
+            name: m.id
+          }));
+          fetched = true;
+        }
+      } catch (e) {}
+
+      if (!fetched) {
+        try {
+          const ollamaBase = cleanBase.replace(/\/v1$/, '');
+          const ollamaRes = await fetch(`${ollamaBase}/api/tags`);
+          if (ollamaRes.ok) {
+            const data = await ollamaRes.json();
+            models = (data.models || []).map((m: any) => ({
+              id: m.name,
+              name: m.name
+            }));
+          }
+        } catch (err) {}
+      }
+    }
+
+    // Sort alphabetically by ID
+    models.sort((a, b) => a.id.localeCompare(b.id));
+
+    return res.json({ success: true, models, count: models.length });
+  } catch (err: any) {
+    return res.status(400).json({ success: false, error: err.message, models: [] });
+  }
+});
+
 // Real Stock B-Roll Search Endpoint using Pexels / Pixabay
 app.get('/api/broll-search', async (req, res) => {
   const query = (req.query.q as string) || 'technology';
