@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import multer from 'multer';
@@ -378,8 +379,8 @@ app.get('/api/broll-search', async (req, res) => {
   res.json({ provider: 'none', videos: [] });
 });
 
-// Setup Vite development middleware
-async function startServer() {
+// Setup Vite development middleware & resilient port binding
+async function startServer(initialPort: number = PORT) {
   const isProduction = process.env.NODE_ENV === 'production';
 
   if (!isProduction) {
@@ -395,12 +396,27 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`\n======================================================`);
-    console.log(`🚀 ViralClip Studio is live at http://localhost:${PORT}`);
-    console.log(`🎬 AI Virality Engine & REA Opus Architecture Ready`);
-    console.log(`======================================================\n`);
-  });
+  const server = http.createServer(app);
+
+  function tryListen(portToTry: number) {
+    server.listen(portToTry, () => {
+      console.log(`\n======================================================`);
+      console.log(`🚀 ViralClip Studio is live at http://localhost:${portToTry}`);
+      console.log(`🎬 AI Virality Engine & REA Opus Architecture Ready`);
+      console.log(`======================================================\n`);
+    });
+
+    server.once('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Port Notice] Port ${portToTry} is occupied. Attempting port ${portToTry + 1}...`);
+        tryListen(portToTry + 1);
+      } else {
+        console.error('[Server Error]:', err);
+      }
+    });
+  }
+
+  tryListen(initialPort);
 }
 
 startServer();
