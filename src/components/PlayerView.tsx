@@ -135,101 +135,166 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
           ctx.drawImage(video, 0, 0, vw, vh, 0, 0, canvas.width, canvas.height);
         }
 
-        // Render Hook Headline Banner (at top)
+        // Render Hook Headline Banner (Bigger, Borderless High-Contrast Pill)
         if (showHookBanner && clip.hookHeadline) {
           ctx.save();
-          const bannerY = aspectRatio === '9:16' ? 140 : 50;
-          ctx.font = '900 36px "Plus Jakarta Sans", sans-serif';
+          const isVertical = aspectRatio === '9:16';
+          const fontSize = isVertical ? 58 : 36;
+          ctx.font = `900 ${fontSize}px "Plus Jakarta Sans", sans-serif`;
           ctx.textAlign = 'center';
-          const text = clip.hookHeadline.toUpperCase();
-          const textWidth = ctx.measureText(text).width;
+          ctx.textBaseline = 'middle';
 
-          // Background pill
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-          ctx.strokeStyle = 'rgba(250, 204, 21, 0.5)';
-          ctx.lineWidth = 3;
-          const padX = 28;
-          const padY = 16;
-          roundRect(
-            ctx,
-            (canvas.width - textWidth) / 2 - padX,
-            bannerY - 36,
-            textWidth + padX * 2,
-            56,
-            16
-          );
+          const rawText = clip.hookHeadline.toUpperCase();
+          const maxLineWidth = canvas.width * 0.86;
+          const words = rawText.split(/\s+/);
+          const lines: string[] = [];
+          let currentLine = '';
+
+          for (const word of words) {
+            const testLine = currentLine ? `${currentLine} ${word}` : word;
+            if (ctx.measureText(testLine).width > maxLineWidth && currentLine) {
+              lines.push(currentLine);
+              currentLine = word;
+            } else {
+              currentLine = testLine;
+            }
+          }
+          if (currentLine) lines.push(currentLine);
+
+          const lineHeight = fontSize * 1.25;
+          const bannerHeight = lines.length * lineHeight + (isVertical ? 42 : 24);
+          const bannerY = isVertical ? 150 : 55;
+
+          let longestLine = 0;
+          for (const line of lines) {
+            const w = ctx.measureText(line).width;
+            if (w > longestLine) longestLine = w;
+          }
+
+          const padX = isVertical ? 40 : 26;
+          const bannerWidth = Math.min(canvas.width - 60, longestLine + padX * 2);
+          const bannerX = (canvas.width - bannerWidth) / 2;
+
+          // Pure Solid Background Pill - NO BORDER
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+          ctx.shadowBlur = 24;
+          ctx.shadowOffsetY = 10;
+          ctx.fillStyle = 'rgba(10, 15, 29, 0.94)';
+          roundRect(ctx, bannerX, bannerY, bannerWidth, bannerHeight, 22);
           ctx.fill();
-          ctx.stroke();
+          // Notice: NO ctx.stroke() -> Completely borderless!
 
-          // Text
-          ctx.fillStyle = '#FACC15';
-          ctx.fillText(text, canvas.width / 2, bannerY + 4);
+          // Reset shadow for crisp text
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetY = 0;
+
+          // Render High-Voltage Yellow Text Lines
+          ctx.fillStyle = '#FFDD00';
+          const textStartY = bannerY + (isVertical ? 21 : 12) + fontSize / 2;
+          lines.forEach((line, idx) => {
+            ctx.fillText(line, canvas.width / 2, textStartY + idx * lineHeight);
+          });
+
           ctx.restore();
         }
 
-        // Render Dynamic Karaoke Subtitles
-        const now = video.currentTime;
-        const words = clip.words || [];
+        // Render Dynamic Karaoke Subtitles (Auto-Transcribing & Auto-Timing Fallback)
+        let wordsList = clip.words || [];
+        if (wordsList.length < 2 && (clip.transcript || clip.title)) {
+          // Synthesize word-level timestamps from transcript or title across clip duration
+          const textToUse = clip.transcript || clip.title;
+          const rawWords = textToUse.trim().split(/\s+/).filter(Boolean);
+          if (rawWords.length > 0) {
+            const clipDuration = Math.max(1, clip.endTime - clip.startTime);
+            const timePerWord = clipDuration / rawWords.length;
+            wordsList = rawWords.map((word, idx) => ({
+              word,
+              start: clip.startTime + idx * timePerWord,
+              end: clip.startTime + (idx + 1) * timePerWord
+            }));
+          }
+        }
 
-        // Find current subtitle block (around current time)
-        const currentWordIdx = words.findIndex((w) => now >= w.start && now <= w.end);
-        if (currentWordIdx !== -1) {
-          // Display window of 4 words around current
-          const windowStart = Math.max(0, currentWordIdx - 1);
-          const windowEnd = Math.min(words.length, windowStart + 4);
-          const currentWindow = words.slice(windowStart, windowEnd);
+        if (wordsList.length > 0) {
+          const now = video.currentTime;
 
-          ctx.save();
-          const subY =
-            activePreset.position === 'top'
-              ? 260
-              : activePreset.position === 'middle'
-              ? canvas.height / 2 + 100
-              : canvas.height - 300;
-
-          ctx.font = `900 ${activePreset.fontSize * 2}px ${activePreset.fontFamily}`;
-          ctx.textAlign = 'center';
-          ctx.lineJoin = 'round';
-
-          // Measure words
-          const measured = currentWindow.map((w) => {
-            const rawText = activePreset.uppercase ? w.word.toUpperCase() : w.word;
-            return {
-              text: rawText,
-              width: ctx.measureText(rawText).width,
-              isActive: now >= w.start && now <= w.end
-            };
-          });
-
-          const totalWidth = measured.reduce((acc, m) => acc + m.width + 16, 0) - 16;
-          let startX = (canvas.width - totalWidth) / 2;
-
-          measured.forEach((item) => {
-            const wordCenterX = startX + item.width / 2;
-
-            // Stroke / Outline
-            ctx.strokeStyle = activePreset.strokeColor;
-            ctx.lineWidth = activePreset.strokeWidth * 2;
-            ctx.strokeText(item.text, wordCenterX, subY);
-
-            // Fill color
-            ctx.fillStyle = item.isActive ? activePreset.activeColor : activePreset.normalColor;
-
-            // Scale bounce effect for active word
-            if (item.isActive && activePreset.animation === 'pop') {
-              ctx.save();
-              ctx.translate(wordCenterX, subY);
-              ctx.scale(1.08, 1.08);
-              ctx.fillText(item.text, 0, 0);
-              ctx.restore();
+          // Find current active word index
+          let currentWordIdx = wordsList.findIndex((w) => now >= w.start && now <= w.end);
+          if (currentWordIdx === -1) {
+            if (now >= clip.startTime && now <= clip.endTime) {
+              const clipDur = Math.max(0.1, clip.endTime - clip.startTime);
+              const progress = Math.max(0, Math.min(1, (now - clip.startTime) / clipDur));
+              currentWordIdx = Math.min(wordsList.length - 1, Math.floor(progress * wordsList.length));
+            } else if (now < clip.startTime) {
+              currentWordIdx = 0;
             } else {
-              ctx.fillText(item.text, wordCenterX, subY);
+              currentWordIdx = wordsList.length - 1;
             }
+          }
 
-            startX += item.width + 16;
-          });
+          if (currentWordIdx !== -1) {
+            // Display window of 4 words centered around active word
+            const windowStart = Math.max(0, currentWordIdx - 1);
+            const windowEnd = Math.min(wordsList.length, windowStart + 4);
+            const currentWindow = wordsList.slice(windowStart, windowEnd);
 
-          ctx.restore();
+            ctx.save();
+            const subY =
+              activePreset.position === 'top'
+                ? (aspectRatio === '9:16' ? 380 : 170)
+                : activePreset.position === 'middle'
+                ? canvas.height / 2 + 100
+                : (aspectRatio === '9:16' ? canvas.height - 380 : canvas.height - 180);
+
+            const fontSize = aspectRatio === '9:16' ? activePreset.fontSize * 2 : activePreset.fontSize * 1.4;
+            ctx.font = `900 ${fontSize}px ${activePreset.fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.lineJoin = 'round';
+
+            // Measure words
+            const measured = currentWindow.map((w) => {
+              const rawText = activePreset.uppercase ? w.word.toUpperCase() : w.word;
+              return {
+                text: rawText,
+                width: ctx.measureText(rawText).width,
+                isActive:
+                  (now >= w.start && now <= w.end) ||
+                  (currentWordIdx !== -1 && wordsList[currentWordIdx]?.word === w.word && Math.abs(wordsList[currentWordIdx]?.start - w.start) < 0.1)
+              };
+            });
+
+            const gap = aspectRatio === '9:16' ? 20 : 14;
+            const totalWidth = measured.reduce((acc, m) => acc + m.width + gap, 0) - gap;
+            let startX = (canvas.width - totalWidth) / 2;
+
+            measured.forEach((item) => {
+              const wordCenterX = startX + item.width / 2;
+
+              // Text Stroke / Outline
+              ctx.strokeStyle = activePreset.strokeColor;
+              ctx.lineWidth = activePreset.strokeWidth * (aspectRatio === '9:16' ? 2.2 : 1.5);
+              ctx.strokeText(item.text, wordCenterX, subY);
+
+              // Text Fill Color
+              ctx.fillStyle = item.isActive ? activePreset.activeColor : activePreset.normalColor;
+
+              // Scale bounce animation for active word
+              if (item.isActive && activePreset.animation === 'pop') {
+                ctx.save();
+                ctx.translate(wordCenterX, subY);
+                ctx.scale(1.12, 1.12);
+                ctx.fillText(item.text, 0, 0);
+                ctx.restore();
+              } else {
+                ctx.fillText(item.text, wordCenterX, subY);
+              }
+
+              startX += item.width + gap;
+            });
+
+            ctx.restore();
+          }
         }
       }
 

@@ -71,6 +71,9 @@ export const App: React.FC = () => {
         const uploadData = await uploadRes.json();
         if (!uploadRes.ok) throw new Error(uploadData.error || 'Upload failed');
         videoUrl = uploadData.videoUrl;
+        if (uploadData.transcriptText) {
+          transcriptText = uploadData.transcriptText;
+        }
       }
 
       // Call AI Judge API with active provider configuration
@@ -90,31 +93,50 @@ export const App: React.FC = () => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'AI Analysis failed');
 
-      const generatedClips: CuratedClip[] = (data.clips || []).map((c: any, index: number) => ({
-        clipId: `clip_${Date.now()}_${index}`,
-        rank: c.rank || index + 1,
-        title: c.title || `Viral Clip #${index + 1}`,
-        hookHeadline: c.hookHeadline || 'MUST WATCH MOMENT',
-        startTime: c.startTime || 0,
-        endTime: c.endTime || 30,
-        duration: (c.endTime || 30) - (c.startTime || 0),
-        judgeResult: c.judgeResult || {
-          score: 88,
-          hookScore: 90,
-          coherenceScore: 85,
-          connectionScore: 88,
-          trendScore: 89,
-          sponsorshipScore: 80,
-          hookExplanation: 'Strong opening statement with immediate relevance.',
-          coherenceExplanation: 'Complete narrative unit with no missing context.',
-          viralReasoning: 'Proven high retention pattern on short-form platforms.'
-        },
-        transcript: c.transcript || 'Sample transcript text for this clip segment.',
-        words: c.words || [],
-        suggestedBrollKeywords: c.suggestedBrollKeywords || ['tech', 'future'],
-        layoutType: c.layoutType || 'speaker_center',
-        tags: c.tags || ['#Viral', '#Shorts', '#Trending']
-      }));
+      const generatedClips: CuratedClip[] = (data.clips || []).map((c: any, index: number) => {
+        const startTime = c.startTime || 0;
+        const endTime = c.endTime || 30;
+        const duration = Math.max(1, endTime - startTime);
+
+        // Ensure word-level timestamps are never empty for dynamic karaoke subtitles
+        let words = c.words || [];
+        if (words.length < 2 && (c.transcript || c.title)) {
+          const textToSplit = c.transcript || c.title;
+          const tokens = textToSplit.trim().split(/\s+/).filter(Boolean);
+          const perWord = duration / Math.max(1, tokens.length);
+          words = tokens.map((w: string, i: number) => ({
+            word: w.replace(/[^\w\s'$%!-]/g, ''),
+            start: parseFloat((startTime + i * perWord).toFixed(2)),
+            end: parseFloat((startTime + (i + 1) * perWord).toFixed(2))
+          }));
+        }
+
+        return {
+          clipId: `clip_${Date.now()}_${index}`,
+          rank: c.rank || index + 1,
+          title: c.title || `Viral Clip #${index + 1}`,
+          hookHeadline: c.hookHeadline || 'MUST WATCH MOMENT',
+          startTime,
+          endTime,
+          duration,
+          judgeResult: c.judgeResult || {
+            score: 88,
+            hookScore: 90,
+            coherenceScore: 85,
+            connectionScore: 88,
+            trendScore: 89,
+            sponsorshipScore: 80,
+            hookExplanation: 'Strong opening statement with immediate relevance.',
+            coherenceExplanation: 'Complete narrative unit with no missing context.',
+            viralReasoning: 'Proven high retention pattern on short-form platforms.'
+          },
+          transcript: c.transcript || 'Sample transcript text for this clip segment.',
+          words,
+          suggestedBrollKeywords: c.suggestedBrollKeywords || ['tech', 'future'],
+          layoutType: c.layoutType || 'speaker_center',
+          tags: c.tags || ['#Viral', '#Shorts', '#Trending']
+        };
+      });
 
       const newProject: ProjectState = {
         projectId: `proj_${Date.now()}`,

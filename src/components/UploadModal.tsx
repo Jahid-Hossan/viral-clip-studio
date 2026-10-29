@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Upload, X, Sparkles, Link, Sliders, Film, Wand2, FileVideo, Settings, Server } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Upload, X, Sparkles, Link, Sliders, Film, Wand2, FileVideo, Settings, Server, CheckCircle2, Clock, Loader2 } from 'lucide-react';
 import { CurationPref, AIProviderConfig } from '../types';
 import { DEFAULT_PROVIDER_CONFIGS } from '../lib/providerDefaults';
 
@@ -12,6 +12,13 @@ interface UploadModalProps {
   providerConfig: AIProviderConfig;
   isLoading: boolean;
 }
+
+const GENERATION_STAGES = [
+  { title: '1. Ingest', label: '📥 Demuxing media streams and preparing audio...' },
+  { title: '2. Transcribe', label: '🎙️ Auto-transcribing speech & calculating word timestamps...' },
+  { title: '3. Virality AI', label: '🧠 AI Judge: Scoring hooks, coherence & retention curves...' },
+  { title: '4. 9:16 Synthesis', label: '⚡ Synthesizing 9:16 vertical crop & dynamic karaoke...' }
+];
 
 export const UploadModal: React.FC<UploadModalProps> = ({
   isOpen,
@@ -32,7 +39,46 @@ export const UploadModal: React.FC<UploadModalProps> = ({
   const [enableAutoHook, setEnableAutoHook] = useState(true);
   const [enableAiBroll, setEnableAiBroll] = useState(true);
 
+  // Live Progress Simulation States
+  const [progress, setProgress] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
   const providerInfo = DEFAULT_PROVIDER_CONFIGS[providerConfig.provider] || DEFAULT_PROVIDER_CONFIGS.gemini;
+
+  useEffect(() => {
+    if (!isLoading) {
+      setProgress(0);
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      const elapsed = (Date.now() - startTime) / 1000;
+      setElapsedSeconds(elapsed);
+
+      // Smooth progression curve through the stages
+      if (elapsed < 3) {
+        setProgress(Math.min(25, (elapsed / 3) * 25));
+      } else if (elapsed < 8) {
+        setProgress(25 + Math.min(35, ((elapsed - 3) / 5) * 35));
+      } else if (elapsed < 16) {
+        setProgress(60 + Math.min(28, ((elapsed - 8) / 8) * 28));
+      } else {
+        // Asymptotically approach 97% until server response completes
+        setProgress(88 + Math.min(9, (1 - Math.exp(-(elapsed - 16) / 10)) * 9));
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
+  const currentStageIndex = useMemo(() => {
+    if (progress < 25) return 0;
+    if (progress < 60) return 1;
+    if (progress < 88) return 2;
+    return 3;
+  }, [progress]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -62,7 +108,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
           <div className="flex items-center gap-3">
@@ -76,7 +122,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            disabled={isLoading}
+            className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
           >
             <X className="size-5" />
           </button>
@@ -94,113 +141,113 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             </div>
             <button
               type="button"
+              disabled={isLoading}
               onClick={() => {
                 onClose();
                 onLoadDemo();
               }}
-              className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-colors cursor-pointer"
+              className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors cursor-pointer disabled:opacity-50 shadow-sm"
             >
-              Load Demo Video
+              Load Demo Project
             </button>
           </div>
 
-          {/* Video Input: Dropzone or URL */}
-          <div className="space-y-3">
-            <label className="text-xs font-bold text-slate-200 block">Select Video Source</label>
-            
-            {/* File Drag & Drop Box */}
-            <div className="relative border-2 border-dashed border-slate-800 hover:border-indigo-500/60 rounded-xl p-6 text-center bg-slate-950/50 transition-colors group cursor-pointer">
+          {/* Video Source Picker */}
+          <div className="space-y-4">
+            <label className="text-xs font-bold text-slate-300 block">Choose Video Source</label>
+
+            {/* Drag & Drop File Area */}
+            <div className="border-2 border-dashed border-slate-700/80 hover:border-indigo-500 rounded-2xl p-6 text-center bg-slate-950/40 hover:bg-indigo-950/10 transition-all cursor-pointer relative group">
               <input
                 type="file"
-                accept="video/mp4,video/webm,video/quicktime"
+                accept="video/*"
                 onChange={handleFileChange}
-                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                disabled={isLoading}
+                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full disabled:cursor-not-allowed"
               />
-              <div className="flex flex-col items-center justify-center gap-2">
-                <div className="size-12 rounded-xl bg-slate-900 flex items-center justify-center text-slate-400 group-hover:text-indigo-400 group-hover:scale-105 transition-all">
-                  <FileVideo className="size-6" />
+              <div className="flex flex-col items-center gap-2">
+                <div className="size-12 rounded-full bg-slate-800/80 group-hover:bg-indigo-600/20 flex items-center justify-center transition-colors">
+                  <Film className="size-6 text-indigo-400" />
                 </div>
                 {selectedFile ? (
                   <div>
-                    <p className="text-xs font-bold text-indigo-400">{selectedFile.name}</p>
-                    <p className="text-[11px] text-slate-400">{(selectedFile.size / 1024 / 1024).toFixed(1)} MB</p>
+                    <p className="text-sm font-semibold text-indigo-300">{selectedFile.name}</p>
+                    <p className="text-xs text-slate-500">{(selectedFile.size / (1024 * 1024)).toFixed(1)} MB ready</p>
                   </div>
                 ) : (
                   <div>
-                    <p className="text-xs font-semibold text-slate-200">
-                      Drag and drop your video file here, or <span className="text-indigo-400">browse</span>
+                    <p className="text-xs font-semibold text-slate-300">
+                      Drop MP4/MOV file here, or <span className="text-indigo-400 underline">browse</span>
                     </p>
-                    <p className="text-[11px] text-slate-500 mt-1">MP4, WebM, MOV supported (up to 500MB)</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Podcasts, talks, or long gameplay up to 500MB</p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Or Video URL */}
-            <div className="flex items-center gap-2 text-xs text-slate-500">
-              <div className="flex-1 h-px bg-slate-800"></div>
-              <span>OR PASTE VIDEO LINK</span>
-              <div className="flex-1 h-px bg-slate-800"></div>
-            </div>
-
-            <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2">
-              <Link className="size-4 text-slate-500" />
+            {/* YouTube URL Fallback */}
+            <div>
+              <div className="flex items-center gap-2 mb-1.5">
+                <Link className="size-3.5 text-slate-400" />
+                <span className="text-xs font-semibold text-slate-300">Or Paste YouTube / Web Video URL</span>
+              </div>
               <input
                 type="url"
-                placeholder="https://commondatastorage.googleapis.com/.../video.mp4 or YouTube link"
+                placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
-                className="bg-transparent text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none flex-1"
+                disabled={isLoading}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 font-mono disabled:opacity-50"
               />
             </div>
           </div>
 
-          {/* Curation Preferences (OpusClip Engine) */}
-          <div className="space-y-4 pt-2 border-t border-slate-800">
-            <h4 className="text-xs font-bold text-slate-200 flex items-center gap-2">
-              <Sliders className="size-3.5 text-indigo-400" />
-              <span>AI Curation Preferences (curationPref)</span>
-            </h4>
-
-            {/* Virality Profile */}
-            <div>
-              <label className="text-[11px] font-semibold text-slate-400 block mb-1.5">
-                Target Content Genre & Virality Focus
+          {/* Curation Preferences (REA Opus Virality Engine Config) */}
+          <div className="space-y-4 pt-2 border-t border-slate-800/80">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Sliders className="size-3.5 text-indigo-400" />
+                <span>Virality & Pacing Preferences</span>
               </label>
+            </div>
+
+            {/* Profile Selection */}
+            <div>
+              <label className="text-[11px] font-semibold text-slate-400 block mb-1.5">Virality Style Target</label>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { id: 'podcast_story', label: 'Podcast Storytelling', desc: 'Focus on narrative arc & epiphanies' },
-                  { id: 'high_energy_tiktok', label: 'High-Energy Hook', desc: 'Fast-paced, hook score > 90' },
-                  { id: 'educational', label: 'Tech & Educational', desc: 'Step-by-step insight & clarity' },
-                  { id: 'comedy_punchline', label: 'Humor & Punchline', desc: 'Comic timing & reaction beats' }
-                ].map((prof) => (
+                  { id: 'podcast_story', label: '🎙️ Podcast Storytelling', desc: 'Narrative arcs & personal revelations' },
+                  { id: 'high_energy_tiktok', label: '⚡ High Energy TikTok', desc: 'Explosive hooks & fast-paced cuts' },
+                  { id: 'educational', label: '🧠 Educational & Insight', desc: 'Mental models, advice & key lessons' },
+                  { id: 'comedy_punchline', label: '😂 Punchline & Humor', desc: 'Banter, comedic timing & reactions' }
+                ].map((item) => (
                   <button
-                    key={prof.id}
+                    key={item.id}
                     type="button"
-                    onClick={() => setViralityProfile(prof.id as any)}
-                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                      viralityProfile === prof.id
-                        ? 'bg-indigo-950/60 border-indigo-500 text-indigo-300 ring-1 ring-indigo-500/20'
+                    disabled={isLoading}
+                    onClick={() => setViralityProfile(item.id as any)}
+                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                      viralityProfile === item.id
+                        ? 'bg-indigo-950/60 border-indigo-500 text-indigo-200 ring-1 ring-indigo-500/30'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
-                    <div className="text-xs font-bold text-white">{prof.label}</div>
-                    <div className="text-[10px] text-slate-500">{prof.desc}</div>
+                    <div className="text-xs font-bold text-white">{item.label}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{item.desc}</div>
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Target Duration */}
+            {/* Duration Bracket */}
             <div>
-              <label className="text-[11px] font-semibold text-slate-400 block mb-1.5">
-                Target Clip Length
-              </label>
+              <label className="text-[11px] font-semibold text-slate-400 block mb-1.5">Target Clip Duration</label>
               <div className="grid grid-cols-3 gap-2">
                 {(['<30s', '30-60s', '60-90s'] as const).map((dur) => (
                   <button
                     key={dur}
                     type="button"
+                    disabled={isLoading}
                     onClick={() => setTargetDuration(dur)}
                     className={`py-2 text-xs font-semibold rounded-lg border text-center transition-all cursor-pointer ${
                       targetDuration === dur
@@ -224,7 +271,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                 placeholder="e.g. Find moments discussing AI agent frameworks or startup failures"
                 value={customPrompt}
                 onChange={(e) => setCustomPrompt(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                disabled={isLoading}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
               />
             </div>
 
@@ -235,6 +283,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   type="checkbox"
                   checked={enableAutoHook}
                   onChange={(e) => setEnableAutoHook(e.target.checked)}
+                  disabled={isLoading}
                   className="size-4 rounded accent-indigo-600 cursor-pointer"
                 />
                 <span className="text-xs text-slate-300 font-medium">Auto Hook Title Banner</span>
@@ -245,6 +294,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
                   type="checkbox"
                   checked={enableAiBroll}
                   onChange={(e) => setEnableAiBroll(e.target.checked)}
+                  disabled={isLoading}
                   className="size-4 rounded accent-indigo-600 cursor-pointer"
                 />
                 <span className="text-xs text-slate-300 font-medium">Auto AI B-Roll Suggestions</span>
@@ -263,19 +313,79 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             <button
               type="button"
               onClick={onOpenSettings}
-              className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
+              disabled={isLoading}
+              className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer disabled:opacity-50"
             >
               <Settings className="size-3.5" />
               <span>Change Provider</span>
             </button>
           </div>
 
+          {/* Live Progress Bar Section While Generating */}
+          {isLoading && (
+            <div className="p-5 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-4 shadow-2xl shadow-indigo-950/40 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="size-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                    <Loader2 className="size-5 text-white animate-spin" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-2">
+                      Generating Viral Clips
+                      <span className="text-[10px] text-cyan-400 font-mono flex items-center gap-1">
+                        <Clock className="size-3" />
+                        {elapsedSeconds.toFixed(0)}s elapsed
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-indigo-300 font-medium mt-0.5">
+                      {GENERATION_STAGES[currentStageIndex].label}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-400 font-mono">
+                    {Math.round(progress)}%
+                  </span>
+                </div>
+              </div>
+
+              {/* Glowing Gradient Progress Bar */}
+              <div className="w-full bg-slate-900 rounded-full h-3.5 p-0.5 border border-slate-800 overflow-hidden relative shadow-inner">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transition-all duration-300 relative shadow-lg shadow-indigo-500/50"
+                  style={{ width: `${progress}%` }}
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
+                </div>
+              </div>
+
+              {/* Multi-Step Indicator Pills */}
+              <div className="grid grid-cols-4 gap-2 pt-1">
+                {GENERATION_STAGES.map((s, idx) => (
+                  <div
+                    key={idx}
+                    className={`px-2 py-1.5 rounded-lg border text-center transition-all ${
+                      idx < currentStageIndex
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400'
+                        : idx === currentStageIndex
+                        ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200 ring-1 ring-indigo-500/40'
+                        : 'bg-slate-900/40 border-slate-800/80 text-slate-500'
+                    }`}
+                  >
+                    <div className="text-[9px] font-bold uppercase tracking-wider">{s.title}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Submit Buttons */}
           <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
+              disabled={isLoading}
+              className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
@@ -287,8 +397,8 @@ export const UploadModal: React.FC<UploadModalProps> = ({
             >
               {isLoading ? (
                 <>
-                  <div className="size-3.5 rounded-full border-2 border-white/20 border-t-white animate-spin"></div>
-                  <span>Ingesting & Analyzing with AI...</span>
+                  <Loader2 className="size-4 animate-spin" />
+                  <span>Processing ({Math.round(progress)}%)...</span>
                 </>
               ) : (
                 <>

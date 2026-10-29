@@ -66,18 +66,58 @@ const upload = multer({ storage });
 const geminiApiKey = process.env.GEMINI_API_KEY || '';
 const ai = geminiApiKey ? new GoogleGenAI({ apiKey: geminiApiKey }) : null;
 
-// Upload Endpoint
-app.post('/api/upload', upload.single('video'), (req, res) => {
+// Upload Endpoint with Audio Extraction and Auto-Transcription
+app.post('/api/upload', upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No video file uploaded' });
   }
   const videoUrl = `/uploads/${req.file.filename}`;
+  const filePath = req.file.path;
+  const audioPath = path.join(uploadsDir, `${req.file.filename}.mp3`);
+
+  let transcriptText = '';
+  try {
+    // 1. Extract audio track with ffmpeg (first 180 seconds for speech analysis)
+    console.log(`[Upload] Extracting audio track for speech transcription: ${req.file.filename}`);
+    execSync(`ffmpeg -i "${filePath}" -t 180 -vn -acodec libmp3lame -q:a 4 -y "${audioPath}"`, {
+      stdio: 'ignore'
+    });
+
+    // 2. If Gemini SDK client is available, auto-transcribe directly
+    if (ai && fs.existsSync(audioPath)) {
+      console.log(`[Upload] Auto-transcribing speech with Gemini 3.8 Flash...`);
+      const audioBytes = fs.readFileSync(audioPath);
+      const transcribeRes = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: 'Transcribe this audio verbatim in English. Return only the plain spoken dialogue without timestamps or markdown notes.' },
+              {
+                inlineData: {
+                  mimeType: 'audio/mp3',
+                  data: audioBytes.toString('base64')
+                }
+              }
+            ]
+          }
+        ]
+      });
+      transcriptText = transcribeRes.text?.trim() || '';
+      console.log(`[Upload] Auto-transcription completed (${transcriptText.length} chars)`);
+    }
+  } catch (audioErr) {
+    console.warn('[Upload Auto-Transcription non-fatal note]:', audioErr);
+  }
+
   res.json({
     success: true,
     videoUrl,
     filename: req.file.filename,
     originalName: req.file.originalname,
-    size: req.file.size
+    size: req.file.size,
+    transcriptText
   });
 });
 
@@ -270,13 +310,39 @@ Output an array of 3 to 5 candidate clips in strict JSON format:
       responseText = openAiData.choices?.[0]?.message?.content || '{}';
     }
 
+    // Helper to guarantee every clip has word-level karaoke timestamps
+    const ensureWordTimestamps = (words: any[], transcript: string, startTime: number, endTime: number) => {
+      if (Array.isArray(words) && words.length >= 3 && typeof words[0]?.start === 'number') {
+        return words;
+      }
+      const text = (transcript || '').trim();
+      if (!text) return [];
+
+      const rawWords = text.split(/\s+/).filter(Boolean);
+      if (rawWords.length === 0) return [];
+
+      const duration = Math.max(1, (endTime || 30) - (startTime || 0));
+      const timePerWord = duration / rawWords.length;
+
+      return rawWords.map((w, idx) => ({
+        word: w.replace(/[^\w\s'$%!-]/g, ''),
+        start: parseFloat((startTime + idx * timePerWord).toFixed(2)),
+        end: parseFloat((startTime + (idx + 1) * timePerWord).toFixed(2))
+      }));
+    };
+
     // Clean JSON response in case model wrapped it in markdown fences
     const cleanedJson = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsedData = JSON.parse(cleanedJson);
 
+    const processedClips = (parsedData.clips || []).map((c: any) => ({
+      ...c,
+      words: ensureWordTimestamps(c.words, c.transcript || c.title, c.startTime || 0, c.endTime || 30)
+    }));
+
     res.json({
       success: true,
-      clips: parsedData.clips || []
+      clips: processedClips
     });
   } catch (err: any) {
     console.error('[AI Judge Error]:', err);
